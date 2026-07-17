@@ -1,0 +1,136 @@
+name: Build XianyuAutoReply EXE
+
+on:
+  push:
+    tags:
+      - 'v*'
+  workflow_dispatch:
+    inputs:
+      skip_frontend:
+        description: '跳过前端构建（0=重新构建，1=跳过，需已有 frontend/dist）'
+        required: false
+        default: '0'
+      create_release:
+        description: '构建完成后创建 GitHub Release'
+        type: boolean
+        default: false
+
+env:
+  PYTHON_VERSION: '3.11'   # 需与项目实际开发/目标运行环境的 Python 版本一致
+  NODE_VERSION: '20'
+
+jobs:
+  build:
+    runs-on: windows-latest
+    timeout-minutes: 180
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: ${{ env.PYTHON_VERSION }}
+          cache: 'pip'
+
+      - name: Set up Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: ${{ env.NODE_VERSION }}
+          cache: 'npm'
+          cache-dependency-path: frontend/package-lock.json
+
+      - name: Install Python project dependencies
+        shell: pwsh
+        run: |
+          # 自动发现依赖声明文件，而非猜测固定路径：
+          #   1) 仓库内任意 requirements*.txt
+          #   2) 各子项目 pyproject.toml（backend-web / websocket / scheduler / launcher 等，
+          #      无论其构建后端是 poetry-core / setuptools / hatchling，pip 均可按 PEP 517 本地构建安装）
+          # Nuitka 的 --include-package 要求对应包在构建环境中可被 import，
+          # 故必须在编译前装好全部依赖（包括 playwright 本体，浏览器二进制由构建脚本后续单独下载）。
+          $ErrorActionPreference = "Stop"
+          $installed = $false
+          $excludePattern = '\\node_modules\\|\\frontend\\dist\\|\\frontend\\node_modules\\|\\build_output\\|\\release\\|\\\.git\\'
+
+          Get-ChildItem -Recurse -Filter "requirements*.txt" -File |
+            Where-Object { $_.FullName -notmatch $excludePattern } |
+            ForEach-Object {
+              Write-Host "[INFO] pip install -r $($_.FullName)"
+              pip install -r $_.FullName
+              if ($LASTEXITCODE -ne 0) { throw "pip install failed for $($_.FullName)" }
+              $installed = $true
+            }
+
+          Get-ChildItem -Recurse -Filter "pyproject.toml" -File |
+            Where-Object { $_.FullName -notmatch $excludePattern } |
+            ForEach-Object {
+              $dir = $_.DirectoryName
+              Write-Host "[INFO] pip install `"$dir`""
+              pip install "$dir"
+              if ($LASTEXITCODE -ne 0) { throw "pip install failed for $dir" }
+              $installed = $true
+            }
+
+          if (-not $installed) {
+            throw "未在仓库中找到 requirements*.txt 或 pyproject.toml，依赖安装步骤需要按项目实际情况手动配置。"
+          }
+
+      - name: Set SKIP_FRONTEND
+        shell: pwsh
+        run: |
+          $val = "${{ github.event.inputs.skip_frontend }}"
+          if ([string]::IsNullOrEmpty($val)) { $val = "0" }
+          echo "SKIP_FRONTEND=$val" >> $env:GITHUB_ENV
+
+      # --- 以下两个缓存目标覆盖两类耗时最长、且可被"未变更内容复用"的产物 ---
+      # 1) Nuitka 的 C 编译结果缓存（MSVC 后端下由 Nuitka 内置的 clcache 管理，
+      #    按预处理后的源文件哈希逐文件命中，源码未变更的模块直接复用已编译目标文件）
+      # 2) Playwright Chromium 二进制（体积大，版本不变时无需重新下载）
+      - name: Configure Nuitka cache directory
+        shell: pwsh
+        run: |
+          $cacheDir = Join-Path $env:GITHUB_WORKSPACE ".nuitka-cache"
+          New-Item -ItemType Directory -Force -Path $cacheDir | Out-Null
+          echo "NUITKA_CACHE_DIR=$cacheDir" >> $env:GITHUB_ENV
+
+      - name: Cache Nuitka compilation cache
+        uses: actions/cache@v4
+        with:
+          path: ${{ github.workspace }}\.nuitka-cache
+          key: nuitka-cache-${{ runner.os }}-${{ env.PYTHON_VERSION }}-${{ hashFiles('**/requirements*.txt', '**/pyproject.toml') }}-${{ github.run_id }}
+          restore-keys: |
+            nuitka-cache-${{ runner.os }}-${{ env.PYTHON_VERSION }}-${{ hashFiles('**/requirements*.txt', '**/pyproject.toml') }}-
+            nuitka-cache-${{ runner.os }}-${{ env.PYTHON_VERSION }}-
+            nuitka-cache-${{ runner.os }}-
+
+      - name: Cache Playwright Chromium
+        uses: actions/cache@v4
+        with:
+          path: ${{ github.workspace }}\.playwright-cache
+          key: playwright-chromium-${{ runner.os }}-${{ hashFiles('**/requirements*.txt', '**/pyproject.toml') }}-${{ github.run_id }}
+          restore-keys: |
+            playwright-chromium-${{ runner.os }}-${{ hashFiles('**/requirements*.txt', '**/pyproject.toml') }}-
+            playwright-chromium-${{ runner.os }}-
+
+      - name: Run build script
+        shell: cmd
+        run: call github-actions-exe.bat
+
+      - name: Upload build artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: XianyuAutoReply-v${{ env.APP_VER }}
+          path: release/*.zip
+          if-no-files-found: error
+          retention-days: 14
+
+      - name: Create GitHub Release
+        if: startsWith(github.ref, 'refs/tags/v') || github.event.inputs.create_release == 'true'
+        uses: softprops/action-gh-release@v2
+        with:
+          files: release/*.zip
+          generate_release_notes: true
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
