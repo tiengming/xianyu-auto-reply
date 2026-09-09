@@ -23,6 +23,7 @@ from app.services.xianyu_direct_payload import (
     text,
 )
 from app.services.xianyu_item_payload_builder import _build_attribute_labels, _resolve_item_address
+from app.services.xianyu_item_snapshot import as_bool
 from common.services.xianyu_mtop import mtop_call
 from common.services.xianyu_publish_media import PublishMediaError, upload_publish_image
 from common.services.xianyu_publish_video import PublishVideoError, upload_publish_videos
@@ -37,7 +38,7 @@ PUBLISH_REFERER = "https://www.goofish.com/publish"
 def _build_personal_post_fee(item_data: dict[str, Any]) -> dict[str, Any]:
     """按普通卖家网页发布组件的字段规则构造发货配置。"""
     shipping_method = text(item_data.get("shipping_method")) or "free"
-    only_take_self = bool(item_data.get("support_pickup"))
+    only_take_self = as_bool(item_data.get("support_pickup"))
     if shipping_method == "free":
         return {"canFreeShipping": True, "supportFreight": True, "onlyTakeSelf": only_take_self}
     if shipping_method == "distance":
