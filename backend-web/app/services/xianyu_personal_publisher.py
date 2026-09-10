@@ -17,6 +17,7 @@ from loguru import logger
 
 from app.services.xianyu_direct_payload import (
     DirectPublishError,
+    build_item_text_dto,
     extract_item_id_from_url,
     find_item_reference,
     price_in_cent,
@@ -157,7 +158,7 @@ class XianyuPersonalPublisher:
             "quantity": "1",
             "simpleItem": "true",
             "imageInfoDOList": video_items + image_items,
-            "itemTextDTO": {"desc": description, "title": title, "titleDescSeparate": False},
+            "itemTextDTO": build_item_text_dto(title, description),
             "itemLabelExtList": labels,
             "itemPriceDTO": {
                 "origPriceInCent": price_in_cent(

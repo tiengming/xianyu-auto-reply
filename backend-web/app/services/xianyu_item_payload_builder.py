@@ -19,6 +19,7 @@ from typing import Any
 from app.services.amap_inputtips_service import AmapInputTipsError, AmapInputTipsService
 from app.services.xianyu_direct_payload import (
     DirectPublishError,
+    build_item_text_dto as _build_item_text_dto,
     build_sku_payload as _build_sku_payload,
     price_in_cent as _price_in_cent,
     text as _text,
@@ -465,7 +466,7 @@ async def build_item_payload(
         "quantity": "1" if is_multi_spec else _resolve_quantity(item_data),
         "simpleItem": "true",
         "imageInfoDOList": video_items + image_items,
-        "itemTextDTO": {"desc": description, "title": title, "titleDescSeparate": False},
+        "itemTextDTO": _build_item_text_dto(title, description),
         "itemLabelExtList": labels,
         "itemProperties": item_properties,
         "userRightsProtocols": _resolve_user_rights(snapshot),
